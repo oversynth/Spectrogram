@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oversynth Spectrogram</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh; /* Ensure body fills viewport */
+        }
+        .top-bar {
+            width: 98%;
+            display: flex;
+            justify-content: flex-start;
+            align-items: flex-start;
+            padding: 10px;
+            position: relative;
+        }
+        .left-section {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        h1 {
+            margin: 0;
+            line-height: 1.2;
+        }
+        .oversynth {
+            font-size: 16px;
+        }
+        .spectrogram {
+            font-size: 20px;
+        }
+        button {
+            padding: 5px 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        select {
+            padding: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        label {
+            font-size: 16px;
+        }
+        canvas {
+            width: 98%;
+            height: 60vh; /* Reduced from 70vh to avoid overlap */
+            background: white;
+        }
+        .bottom-controls {
+            width: 98%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 10px;
+            position: absolute;
+            bottom: 40px; /* Above legend */
+        }
+        .legend {
+            width: 98%;
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 14px;
+        }
+        .legend-box {
+            width: 40px;
+            height: 20px;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+        }
+        @media (max-width: 600px) {
+            .left-section, .controls, .bottom-controls {
+                width: 100%;
+            }
+            button, select {
+                width: 100%;
+                box-sizing: border-box;
+            }
+            .bottom-controls {
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                padding-left: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="left-section">
+            <h1>
+                <span class="oversynth">Oversynth.com</span><br>
+                <span class="spectrogram">Realtime Spectrogram</span>
+            </h1>
+            <div class="controls">
+                <button id="toggleButton">Start</button>
+            </div>
+        </div>
+    </div>
+    <canvas id="spectrogramCanvas"></canvas>
+    <div class="bottom-controls">
+        <label for="maxFreqSelector">Max Freq:</label>
+        <select id="maxFreqSelector">
+            <option value="22100">22.1 kHz (Full Range)</option>
+            <option value="11000">11 kHz</option>
+            <option value="6000">6 kHz</option>
+            <option value="3000" selected>3 kHz</option>
+            <option value="1000">1 kHz</option>
+        </select>
+    </div>
+    <div class="legend">
+        <strong>Intensity (dB):</strong>
+        <div class="legend-box" style="background: rgb(200, 200, 200); color: black;">-60</div>
+        <div class="legend-box" style="background: rgb(150, 150, 150);">-40</div>
+        <div class="legend-box" style="background: rgb(100, 100, 100);">-20</div>
+        <div class="legend-box" style="background: rgb(50, 50, 50);">0</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('spectrogramCanvas');
+        const ctx = canvas.getContext('2d');
+        const toggleButton = document.getElementById('toggleButton');
+        const maxFreqSelector = document.getElementById('maxFreqSelector');
+        let audioContext, analyser, source, dataArray, bufferLength, animationId, stream;
+        const scaleFactor = 0.8;
+
+        // Set up canvas dimensions
+        function resizeCanvas() {
+            canvas.width = window.innerWidth * 0.98;
+            canvas.height = window.innerHeight * 0.6; // Match CSS height
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawFrequencyLabels(parseFloat(maxFreqSelector.value)); // Redraw labels on resize
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Initialize audio (runs once)
+        async function initAudio() {
+            if (!audioContext) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    source = audioContext.createMediaStreamSource(stream);
+                } catch (err) {
+                    alert('Microphone access denied');
+                    toggleButton.textContent = 'Start';
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Configure analyser based on selected max frequency
+        function setupAnalyser() {
+            if (analyser) {
+                analyser.disconnect();
+            }
+            analyser = audioContext.createAnalyser();
+            const maxFreq = parseFloat(maxFreqSelector.value);
+            analyser.fftSize = maxFreq === 1000 ? 16384 : 4096; // Higher resolution for 1 kHz
+            analyser.smoothingTimeConstant = 0.05;
+            bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+            source.connect(analyser);
+        }
+
+        // Start or resume audio and animation
+        async function startAudio() {
+            const initialized = await initAudio();
+            if (!initialized) return;
+
+            setupAnalyser();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+            toggleButton.textContent = 'Pause';
+            if (animationId) {
+                cancelAnimationFrame(animationId); // Clear any lingering animation
+            }
+            draw();
+        }
+
+        // Pause audio and animation
+        function pauseAudio() {
+            if (audioContext) {
+                audioContext.suspend();
+                cancelAnimationFrame(animationId);
+                toggleButton.textContent = 'Start';
+            }
+        }
+
+        // Draw spectrogram
+        function draw() {
+            animationId = requestAnimationFrame(draw);
+            analyser.getByteFrequencyData(dataArray);
+
+            // Shift existing pixels left
+            const imageData = ctx.getImageData(1, 0, canvas.width - 1, canvas.height);
+            ctx.putImageData(imageData, 0, 0);
+
+            // Get selected max frequency
+            const maxFreq = parseFloat(maxFreqSelector.value);
+            const nyquist = audioContext.sampleRate / 2;
+            const freqStep = nyquist / bufferLength;
+
+            // Draw new column up to selected max frequency
+            for (let i = 0; i < bufferLength; i++) {
+                const freq = i * freqStep;
+                if (freq > maxFreq) break; // Stop at selected max frequency
+                const y = (1 - Math.pow(freq / maxFreq, scaleFactor)) * (canvas.height - 20) + 10;
+                const intensity = dataArray[i] / 255 * 100;
+                ctx.fillStyle = `rgb(${100 - intensity}%, ${100 - intensity}%, ${100 - intensity}%)`;
+                ctx.fillRect(canvas.width - 1, y, 1, 1);
+            }
+
+            // Draw frequency labels
+            drawFrequencyLabels(maxFreq);
+        }
+
+        // Draw frequency labels based on max frequency
+        function drawFrequencyLabels(maxFreq) {
+            ctx.font = '16px Arial';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const numLabels = 15;
+            const isLowFreq = maxFreq === 1000 || maxFreq === 3000;
+
+            for (let i = 0; i <= numLabels; i++) {
+                const freq = (i / numLabels) * maxFreq;
+                const y = (1 - Math.pow(i / numLabels, scaleFactor)) * (canvas.height - 20) + 10;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.fillRect(5, y - 10, 80, 20);
+                ctx.fillStyle = 'black';
+                if (isLowFreq) {
+                    ctx.fillText(`${Math.round(freq)} Hz`, 10, y);
+                } else {
+                    ctx.fillText(`${(freq / 1000).toFixed(1)} kHz`, 10, y);
+                }
+            }
+        }
+
+        // Toggle audio on/off
+        toggleButton.addEventListener('click', () => {
+            if (!audioContext || audioContext.state === 'suspended') {
+                startAudio();
+            } else {
+                pauseAudio();
+            }
+        });
+
+        // Handle max frequency change
+        maxFreqSelector.addEventListener('change', async () => {
+            if (!audioContext) return; // Do nothing if audio hasn’t started yet
+
+            const wasRunning = audioContext.state === 'running';
+            if (wasRunning) {
+                audioContext.suspend(); // Pause audio during reconfiguration
+                cancelAnimationFrame(animationId);
+            }
+
+            setupAnalyser();
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawFrequencyLabels(parseFloat(maxFreqSelector.value));
+
+            if (wasRunning) {
+                await audioContext.resume();
+                draw(); // Restart drawing if it was running
+                toggleButton.textContent = 'Pause';
+            } else {
+                toggleButton.textContent = "Start";
+            }
+        });
+    </script>
+</body>
+</html>
