@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oversynth Realtime Spectrogram</title>
+    <style>
+        body { text-align: center; font-family: Arial, sans-serif; background: white; }
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+        }
+        h1 {
+            font-size: 20px;
+            margin: 0;
+            flex-grow: 1;
+            text-align: right;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-right: 40px;
+        }
+        .legend-container {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        .legend-box {
+            width: 40px;
+            height: 20px;
+            text-align: center;
+            font-size: 14px;
+            display: inline-block;
+        }
+        canvas { 
+            width: 98%; 
+            height: 85vh; 
+            background: white; 
+            display: block; 
+            margin: auto;
+            padding-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="controls">
+            <button onclick="startAudio()">Start</button>
+            <button onclick="stopAudio()">Stop</button>
+            
+        </div>
+        <div class="legend-container">
+            <strong>Intensity (dB):</strong>
+            <span class="legend-box" style="background: rgb(200, 200, 200); color: black;">-60</span>
+            <span class="legend-box" style="background: rgb(150, 150, 150); color: white;">-40</span>
+            <span class="legend-box" style="background: rgb(100, 100, 100); color: white;">-20</span>
+            <span class="legend-box" style="background: rgb(50, 50, 50); color: white;">0</span>
+        </div>
+        <h1>Oversynth Realtime Spectrogram</h1>
+    </div>
+    <canvas id="spectrogram"></canvas>
+    
+    <script>
+        let audioCtx, analyser, canvas, ctx, dataArray, bufferLength, animationFrameId, source, stream;
+        let scaleFactor = 0.8; // Default scale factor
+
+        async function startAudio() {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === "suspended") {
+                await audioCtx.resume();
+            }
+            source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 4096;
+            analyser.smoothingTimeConstant = 0.05;
+            bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+            source.connect(analyser);
+            setupCanvas();
+            drawSpectrogram();
+        }
+
+        function stopAudio() {
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            cancelAnimationFrame(animationFrameId);
+        }
+
+        function setupCanvas() {
+            canvas = document.getElementById("spectrogram");
+            ctx = canvas.getContext("2d");
+            canvas.width = window.innerWidth * 0.98;
+            canvas.height = window.innerHeight * 0.85;
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function updateScaleFactor() {
+            scaleFactor = parseFloat(document.getElementById("scaleFactor").value);
+        }
+
+        function drawSpectrogram() {
+            animationFrameId = requestAnimationFrame(drawSpectrogram);
+            analyser.getByteFrequencyData(dataArray);
+            
+            const imageData = ctx.getImageData(1, 0, canvas.width - 1, canvas.height);
+            ctx.putImageData(imageData, 0, 0);
+            
+            for (let i = 0; i < bufferLength; i++) {
+                const freq = i * (audioCtx.sampleRate / 2) / bufferLength;
+                const y = (1 - Math.pow(i / bufferLength, scaleFactor)) * (canvas.height - 20) + 10;
+                let value = dataArray[i] / 255 * 100;
+                
+                ctx.fillStyle = `rgb(${100 - value}%, ${100 - value}%, ${100 - value}%)`;
+                ctx.fillRect(canvas.width - 1, y, 1, 1);
+            }
+            drawFrequencyLabels();
+        }
+
+        function drawFrequencyLabels() {
+            ctx.fillStyle = "black";
+            ctx.font = "16px Arial";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            
+            const nyquist = audioCtx.sampleRate / 2;
+            const numLabels = 15;
+            
+            for (let i = 0; i <= numLabels; i++) {
+                let freq = (i / numLabels) * nyquist;
+                let y = (1 - Math.pow(i / numLabels, scaleFactor)) * (canvas.height - 20) + 10;
+                
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+                ctx.fillRect(5, y - 10, 100, 20);
+                
+                ctx.fillStyle = "black";
+                ctx.fillText(`${(freq / 1000).toFixed(1)} kHz`, 10, y);
+            }
+        }
+    </script>
+</body>
+</html>
